@@ -1,25 +1,33 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../providers/diary_form_provider.dart';
+import '../../../../core/constants/app_constants.dart';
 
-class DiaryWriteScreen extends StatefulWidget {
+class DiaryWriteScreen extends ConsumerStatefulWidget {
   const DiaryWriteScreen({super.key});
 
   @override
-  State<DiaryWriteScreen> createState() => _DiaryWriteScreenState();
+  ConsumerState<DiaryWriteScreen> createState() => _DiaryWriteScreenState();
 }
 
-class _DiaryWriteScreenState extends State<DiaryWriteScreen> {
+class _DiaryWriteScreenState extends ConsumerState<DiaryWriteScreen> {
   final _titleController = TextEditingController();
   final _contentController = TextEditingController();
-  String? _selectedEmotion;
 
-  final List<Map<String, String>> _emotions = [
-    {'name': 'happy', 'emoji': '😊'},
-    {'name': 'sad', 'emoji': '😢'},
-    {'name': 'excited', 'emoji': '🤗'},
-    {'name': 'peaceful', 'emoji': '😌'},
-    {'name': 'anxious', 'emoji': '😰'},
-  ];
+  final List<Map<String, String>> _emotions = AppConstants.emotionTags
+      .map((tag) => {
+            'name': tag,
+            'emoji': AppConstants.emotionEmojis[tag] ?? '•',
+          })
+      .toList();
+
+  @override
+  void initState() {
+    super.initState();
+    _titleController.addListener(_onTitleChanged);
+    _contentController.addListener(_onContentChanged);
+  }
 
   @override
   void dispose() {
@@ -28,20 +36,43 @@ class _DiaryWriteScreenState extends State<DiaryWriteScreen> {
     super.dispose();
   }
 
+  void _onTitleChanged() {
+    ref.read(diaryFormProvider.notifier).setTitle(_titleController.text);
+  }
+
+  void _onContentChanged() {
+    ref.read(diaryFormProvider.notifier).setContent(_contentController.text);
+  }
+
   @override
   Widget build(BuildContext context) {
+    final formState = ref.watch(diaryFormProvider);
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Write Diary'),
         leading: IconButton(
           icon: const Icon(Icons.close),
-          onPressed: () => context.pop(),
+          onPressed: () {
+            ref.read(diaryFormProvider.notifier).reset();
+            context.pop();
+          },
         ),
         actions: [
-          TextButton(
-            onPressed: _saveDiary,
-            child: const Text('Save'),
-          ),
+          if (formState.isLoading || formState.isGeneratingAI)
+            const Padding(
+              padding: EdgeInsets.all(16),
+              child: SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            )
+          else
+            TextButton(
+              onPressed: formState.isValid ? _saveDiary : null,
+              child: const Text('Save'),
+            ),
         ],
       ),
       body: SingleChildScrollView(
@@ -57,15 +88,17 @@ class _DiaryWriteScreenState extends State<DiaryWriteScreen> {
             const SizedBox(height: 12),
             Wrap(
               spacing: 12,
+              runSpacing: 8,
               children: _emotions.map((emotion) {
-                final isSelected = _selectedEmotion == emotion['name'];
+                final emotionName = emotion['name']!;
+                final isSelected = formState.emotions.contains(emotionName);
                 return ChoiceChip(
-                  label: Text('${emotion['emoji']} ${emotion['name']}'),
+                  label: Text('${emotion['emoji']} $emotionName'),
                   selected: isSelected,
-                  onSelected: (selected) {
-                    setState(() {
-                      _selectedEmotion = selected ? emotion['name'] : null;
-                    });
+                  onSelected: (_) {
+                    ref
+                        .read(diaryFormProvider.notifier)
+                        .toggleEmotion(emotionName);
                   },
                 );
               }).toList(),
@@ -100,11 +133,45 @@ class _DiaryWriteScreenState extends State<DiaryWriteScreen> {
     );
   }
 
-  void _saveDiary() {
-    // TODO: Implement save functionality
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Diary saved! (Implementation pending)')),
-    );
-    context.pop();
+  Future<void> _saveDiary() async {
+    final formState = ref.read(diaryFormProvider);
+
+    if (!formState.isValid) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please write something')),
+      );
+      return;
+    }
+
+    // Show AI generation message if content is substantial
+    if (formState.content.length > 50) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Saving and generating AI feedback...'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
+
+    final success = await ref.read(diaryFormProvider.notifier).saveDiary();
+
+    if (!mounted) return;
+
+    if (success) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Diary saved successfully!'),
+          backgroundColor: Colors.green,
+        ),
+      );
+      context.pop();
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Failed to save diary'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 }
